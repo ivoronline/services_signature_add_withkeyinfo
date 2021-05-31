@@ -23,6 +23,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.security.KeyStore;
+import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,7 +37,7 @@ public class AddSIgnatureWithKeyInfo {
   static String keyStoreType     = "JKS";
   static String keyAlias         = "clientkeys1";
 
-  //SIGN DOCUMENT
+  //XML FILES
   static String xmlInput         = "src/main/resources/Person.xml";
   static String xmlOutput        = "src/main/resources/PersonSignedWithKeyInfo.xml";
 
@@ -45,40 +46,43 @@ public class AddSIgnatureWithKeyInfo {
   //================================================================================
   public static void main(String[] args) throws Exception {
 
-    //LOG
-    System.out.println("MyRunnerWithKeyInfo");
-
-    //CREATE XML SIGNATURE FACTORY
-    XMLSignatureFactory factory = XMLSignatureFactory.getInstance("DOM");
-
-    //GET KEY STORE, PRIVATE & PUBLIC KEY (CERTIFICATE)
-    KeyStore                    keyStore    = KeyStore.getInstance(keyStoreType);
-                                keyStore.load(new FileInputStream(keyStoreName), keyStorePassword.toCharArray());
-    KeyStore.PasswordProtection keyPassword = new KeyStore.PasswordProtection(keyStorePassword.toCharArray());
-    KeyStore.PrivateKeyEntry    keyPair     = (KeyStore.PrivateKeyEntry) keyStore.getEntry(keyAlias, keyPassword);
-    X509Certificate             certificate = (X509Certificate) keyPair.getCertificate();
-
-    //CREATE KEY INFO
-    KeyInfoFactory keyInfoFactory     = factory.getKeyInfoFactory();
-    List           certificateContent = new ArrayList();
-                   certificateContent.add(certificate.getSubjectX500Principal().getName());
-                   certificateContent.add(certificate);
-    X509Data certificateData = keyInfoFactory.newX509Data(certificateContent);
-    KeyInfo keyInfo          = keyInfoFactory.newKeyInfo(Collections.singletonList(certificateData));
-
-    //LOAD INPUT XML DOCUMENT
+    //GET DOCUMENT (from XML file)
     DocumentBuilderFactory documentFactory = DocumentBuilderFactory.newInstance();
                            documentFactory.setNamespaceAware(true);
-    Document               inputDocument   = documentFactory.newDocumentBuilder().parse(new FileInputStream(xmlInput));
+    Document    document = documentFactory.newDocumentBuilder().parse(new FileInputStream(xmlInput));
 
-    // Create a DOMSignContext and specify the RSA PrivateKey and location of the resulting XMLSignature's parent element.
-    DOMSignContext domSignContext = new DOMSignContext(keyPair.getPrivateKey(), inputDocument.getDocumentElement());
+    //SIGN DOCUMENT
+    signDocument(document);
+
+    //CREATE OUTPUT XML FILE
+    OutputStream       outputStream       = new FileOutputStream(xmlOutput);
+    TransformerFactory transformerFactory = TransformerFactory.newInstance();
+    Transformer        transformer        = transformerFactory.newTransformer();
+                       transformer.transform(new DOMSource(document), new StreamResult(outputStream));
+
+  }
+
+  //================================================================================
+  // SIGN DOCUMENT
+  //================================================================================
+  public static Document signDocument(Document document) throws Exception {
+
+    //GET PRIVATE KEY
+    char[]                      password    = keyStorePassword.toCharArray();  //The same for KeyStore & Private Key
+    KeyStore                    keyStore    = KeyStore.getInstance(keyStoreType);
+                                keyStore.load(new FileInputStream(keyStoreName), password);
+    KeyStore.PasswordProtection keyPassword = new KeyStore.PasswordProtection(   password);
+    KeyStore.PrivateKeyEntry    keyPair     = (KeyStore.PrivateKeyEntry) keyStore.getEntry(keyAlias, keyPassword);
+    PrivateKey privateKey  = keyPair.getPrivateKey();
 
     //CREATE REFERENCE
-    Reference reference = factory.newReference(
+    XMLSignatureFactory factory   = XMLSignatureFactory.getInstance("DOM");
+    Reference           reference = factory.newReference(
       "",
       factory.newDigestMethod(DigestMethod.SHA1, null),
-      Collections.singletonList(factory.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null)),null, null
+      Collections.singletonList(factory.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null)),
+      null,
+      null
     );
 
     //SPECIFY SIGNATURE TYPE
@@ -87,15 +91,22 @@ public class AddSIgnatureWithKeyInfo {
       factory.newSignatureMethod       (SignatureMethod.RSA_SHA1, null),Collections.singletonList(reference)
     );
 
-    //SIGN DOCUMENT
-    XMLSignature signature = factory.newXMLSignature(signedInfo, keyInfo);
-                 signature.sign(domSignContext);
+    //CREATE KEY INFO
+    X509Certificate certificate        = (X509Certificate) keyPair.getCertificate();
+    KeyInfoFactory  keyInfoFactory     = factory.getKeyInfoFactory();
+    List            certificateContent = new ArrayList();
+                    certificateContent.add(certificate.getSubjectX500Principal().getName());
+                    certificateContent.add(certificate);
+    X509Data        certificateData    = keyInfoFactory.newX509Data(certificateContent);
+    KeyInfo         keyInfo            = keyInfoFactory.newKeyInfo(Collections.singletonList(certificateData));
 
-    //CREATE OUTPUT XML DOCUMENT
-    OutputStream       outputStream       = new FileOutputStream(xmlOutput);
-    TransformerFactory transformerFactory = TransformerFactory.newInstance();
-    Transformer        transformer        = transformerFactory.newTransformer();
-                       transformer.transform(new DOMSource(inputDocument), new StreamResult(outputStream));
+    //SIGN DOCUMENT
+    DOMSignContext domSignContext = new DOMSignContext(privateKey, document.getDocumentElement());
+    XMLSignature   signature      = factory.newXMLSignature(signedInfo, keyInfo);
+                   signature.sign(domSignContext);
+
+    //RETURN DOCUMENT
+    return document;
 
   }
 
